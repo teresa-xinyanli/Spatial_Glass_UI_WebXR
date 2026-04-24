@@ -1,9 +1,9 @@
 const STYLE_ID = 'attrax-spatial-focus-ui-style';
 
 const POPUP_OPTIONS = [
-  { action: 'inspect', label: 'Inspect' },
-  { action: 'pin', label: 'Pin' },
-  { action: 'track', label: 'Track' }
+  { action: 'open', label: 'Open' },
+  { action: 'close', label: 'Close' },
+  { action: 'pin', label: 'Pin' }
 ];
 
 const POPUP_WIDTH = 228;
@@ -289,6 +289,16 @@ export class SpatialFocusUI {
     this._wasVisible = false;
     this._entranceTimer = 0;
 
+    // Sticky side selection: without hysteresis, ~1 px EMA-residual noise on
+    // the focused object's halfW/halfH flips computePopupPosition's "does
+    // this side fit" boolean between frames whenever the object sits near
+    // the boundary where, say, 'top' just barely fits. Each flip teleports
+    // the popup a couple hundred pixels (top ↔ right), which looks like the
+    // popup is jumping around the object. Remember the last chosen side and
+    // only switch when the current side *clearly* no longer works.
+    this._currentSide = null;
+    this._currentSideLabel = null;
+
     // World-anchor parallax: a small 2D offset pushed in from Experience
     // every frame (driven by camera.rotation). Applied at render time only,
     // so the damp + deadzone + ping origin all stay wired to the pure
@@ -484,7 +494,7 @@ export class SpatialFocusUI {
    * by the smallest margin so the clamp pushes the popup back in with the
    * least visual disruption.
    */
-  computePopupPosition(objectCenter, bboxSize) {
+  computePopupPosition(objectCenter, bboxSize, focusedLabel) {
     const bounds = this.getPopupSafeBounds();
     const popupH = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
     const popupHalfW = POPUP_WIDTH * 0.5;
@@ -514,28 +524,46 @@ export class SpatialFocusUI {
       }
     ];
 
-    const fits = (c) =>
-      c.x >= bounds.minX
-      && c.x <= bounds.maxX
-      && c.y >= bounds.minY
-      && c.y <= bounds.maxY;
+    const overflowOf = (c) => {
+      const ox = Math.max(0, bounds.minX - c.x, c.x - bounds.maxX);
+      const oy = Math.max(0, bounds.minY - c.y, c.y - bounds.maxY);
+      return ox + oy;
+    };
+    const fits = (c) => overflowOf(c) === 0;
 
-    let chosen = candidates.find(fits);
+    // Side hysteresis: if we already had a side picked for this same object
+    // and it's still roughly acceptable (overflow under the hysteresis band),
+    // keep it. This absorbs the 1-2 px halfW/halfH jitter that would
+    // otherwise flip us between adjacent sides every few frames.
+    const HYSTERESIS_PX = 28;
+    let chosen = null;
+    if (this._currentSide && this._currentSideLabel === focusedLabel) {
+      const prev = candidates.find((c) => c.side === this._currentSide);
+      if (prev && overflowOf(prev) <= HYSTERESIS_PX) {
+        chosen = prev;
+      }
+    }
 
     if (!chosen) {
-      // Nothing fits: pick the candidate with the smallest combined axis
-      // overflow, so the final clamp only has to shove it a tiny bit.
+      chosen = candidates.find(fits);
+    }
+
+    if (!chosen) {
+      // Nothing fits even with hysteresis: pick the candidate with the
+      // smallest combined axis overflow, so the final clamp only has to
+      // shove it a tiny bit.
       let bestOverflow = Infinity;
       for (const c of candidates) {
-        const ox = Math.max(0, bounds.minX - c.x, c.x - bounds.maxX);
-        const oy = Math.max(0, bounds.minY - c.y, c.y - bounds.maxY);
-        const overflow = ox + oy;
+        const overflow = overflowOf(c);
         if (overflow < bestOverflow) {
           bestOverflow = overflow;
           chosen = c;
         }
       }
     }
+
+    this._currentSide = chosen.side;
+    this._currentSideLabel = focusedLabel;
 
     let popupX = Math.min(Math.max(chosen.x, bounds.minX), bounds.maxX);
     let popupY = Math.min(Math.max(chosen.y, bounds.minY), bounds.maxY);
@@ -659,7 +687,11 @@ export class SpatialFocusUI {
     if (visible) {
       objectCenter = popupAnchor;
       const size = bboxSize || { halfW: 40, halfH: 40 };
-      const popupPos = this.computePopupPosition(objectCenter, size);
+      const popupPos = this.computePopupPosition(
+        objectCenter,
+        size,
+        focusedObject?.label ?? null
+      );
       popupSide = popupPos.side;
 
       // Anchor deadzone: only retarget when the new anchor has shifted more
@@ -739,6 +771,11 @@ export class SpatialFocusUI {
       this.target.tiltY = 0;
       this._entranceTimer = 0;
       this.isHovering = false;
+      // Drop sticky side so the next time the popup appears we re-evaluate
+      // the four sides fresh instead of reusing a stale side for a
+      // different object / screen position.
+      this._currentSide = null;
+      this._currentSideLabel = null;
     }
     this._wasVisible = visible;
 

@@ -538,16 +538,19 @@ export class Experience {
    * Euler because a world-fixed point shifts against the rotation as seen
    * from the view. Capped well under 5% of the viewport per spec.
    *
-   * Derivation of the signs:
-   *   rotation.y > 0 → camera yaws right → world drifts left on screen (-X)
-   *   rotation.x > 0 → camera pitches up  → world drifts down on screen (+Y)
-   *
-   * In desktop mode camera.rotation is driven by mouse via
-   * updateDesktopCamera, so this produces a very gentle "the panel lags
-   * behind my gaze" effect. In XR the camera rotation is the real head
-   * pose and the effect is larger but still capped.
+   * Only active in real WebXR sessions. In desktop mode camera.rotation is
+   * driven by the mouse (updateDesktopCamera) -- so coupling parallax to
+   * it means every mouse move to click a popup button also drifts the
+   * popup, which reads as "the popup is jittering" rather than "my head
+   * moves so the world-anchored popup parallaxes". When the same pointer
+   * that selects objects also controls the camera, the illusion breaks,
+   * so we disable parallax outside of XR entirely.
    */
   computePopupParallaxOffset() {
+    if (!this.renderer.xr?.isPresenting) {
+      return { x: 0, y: 0 };
+    }
+
     const minDim = Math.min(window.innerWidth, window.innerHeight);
     const maxPx = minDim * 0.04; // spec: <5%, we cap at 4%
     const pxPerRad = minDim * 0.9;
