@@ -1,0 +1,169 @@
+:root {
+  color-scheme: dark;
+  font-family: 'Avenir Next', 'Aptos', 'Segoe UI', sans-serif;
+  background: #000000;
+  color: #e9f3ff;
+
+  /* Glassmorphism design tokens shared across all floating UI surfaces. */
+  --attrax-glass-fill:
+    linear-gradient(148deg, rgba(240, 248, 255, 0.18), rgba(184, 222, 255, 0.04)),
+    rgba(10, 20, 35, 0.42);
+  --attrax-glass-fill-strong:
+    linear-gradient(148deg, rgba(240, 248, 255, 0.24), rgba(184, 222, 255, 0.06)),
+    rgba(10, 20, 35, 0.58);
+  --attrax-glass-border: rgba(205, 228, 255, 0.30);
+  --attrax-glass-border-soft: rgba(182, 214, 255, 0.18);
+  --attrax-glass-highlight: rgba(255, 255, 255, 0.08);
+  --attrax-glass-shadow:
+    0 18px 36px rgba(3, 8, 14, 0.42),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  --attrax-glass-blur: blur(18px) saturate(1.15);
+  --attrax-glass-radius-sm: 999px;
+  --attrax-glass-radius-md: 20px;
+  --attrax-text-primary: rgba(244, 250, 255, 0.96);
+  --attrax-text-muted: rgba(220, 234, 250, 0.74);
+  --attrax-text-faint: rgba(200, 222, 246, 0.42);
+  --attrax-accent: rgba(150, 214, 255, 0.86);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  /* Hide the native cursor everywhere by default -- the fluid-glass lens
+     rendered by Experience.cursorLens serves as the cursor. We re-enable a
+     real pointer cursor only on clickable UI affordances below so users
+     still get the standard "this is clickable" hint there. */
+  cursor: none;
+}
+
+canvas {
+  display: block;
+}
+
+.attrax-spatial-popup,
+.attrax-spatial-popup-option,
+.vr-button {
+  cursor: pointer;
+}
+
+.vr-button {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 24px !important;
+  left: auto !important;
+  border: 1px solid var(--attrax-glass-border-soft) !important;
+  border-radius: var(--attrax-glass-radius-sm) !important;
+  background: var(--attrax-glass-fill-strong) !important;
+  color: var(--attrax-text-primary) !important;
+  font-family: inherit !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase;
+  backdrop-filter: var(--attrax-glass-blur);
+  -webkit-backdrop-filter: var(--attrax-glass-blur);
+}
+
+/* Status badge (top-left corner) */
+.attrax-status-badge {
+  position: fixed;
+  left: 14px;
+  top: 14px;
+  z-index: 8;
+  padding: 8px 14px;
+  border-radius: var(--attrax-glass-radius-sm);
+  background: var(--attrax-glass-fill);
+  border: 1px solid var(--attrax-glass-border-soft);
+  color: var(--attrax-text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  backdrop-filter: var(--attrax-glass-blur);
+  -webkit-backdrop-filter: var(--attrax-glass-blur);
+  box-shadow: var(--attrax-glass-shadow);
+}
+
+.attrax-status-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--attrax-accent);
+  box-shadow: 0 0 10px var(--attrax-accent);
+  flex-shrink: 0;
+}
+
+.attrax-status-badge[data-state='loading']::before { background: rgba(255, 210, 130, 0.9); box-shadow: 0 0 10px rgba(255, 210, 130, 0.7); }
+.attrax-status-badge[data-state='error']::before   { background: rgba(255, 130, 140, 0.9); box-shadow: 0 0 10px rgba(255, 130, 140, 0.7); }
+.attrax-status-badge[data-state='idle']::before    { background: rgba(180, 200, 220, 0.6); box-shadow: none; }
+
+.attrax-status-badge .label {
+  color: var(--attrax-text-muted);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.attrax-status-badge .value {
+  color: var(--attrax-text-primary);
+  font-weight: 500;
+}
+
+/* Minimal detection overlay: thin dashed rectangles for ML debugging only.
+   Hidden by default, toggle with D. */
+.attrax-detection-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 7;
+}
+
+.attrax-detection-overlay-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.attrax-bbox {
+  fill: none;
+  stroke: rgba(150, 214, 255, 0.42);
+  stroke-width: 1.2;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.attrax-bbox-focused {
+  stroke: rgba(190, 235, 255, 0.86);
+  stroke-width: 1.4;
+  stroke-dasharray: none;
+}
+
+.attrax-bbox-label {
+  font-family: inherit;
+  font-size: 11px;
+  fill: rgba(220, 240, 255, 0.78);
+  letter-spacing: 0.04em;
+  paint-order: stroke;
+  stroke: rgba(5, 12, 24, 0.85);
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+
+.attrax-bbox-label-focused {
+  fill: rgba(244, 252, 255, 1);
+  font-weight: 600;
+}

@@ -1,0 +1,20 @@
+{
+  "name": "spatial-glass-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.34",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
+    "three": "^0.178.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}
