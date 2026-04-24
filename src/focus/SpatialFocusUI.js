@@ -9,7 +9,18 @@ const POPUP_OPTIONS = [
 const POPUP_WIDTH = 228;
 const POPUP_HEIGHT_ESTIMATE = 172;
 const POPUP_MARGIN = 18;
-const POPUP_OFFSET = 28; // distance from the object's bbox to the popup edge
+const POPUP_OFFSET = 14; // distance from the object's bbox to the popup edge
+
+// Budgets reserved inside the clamp so that render-time effects can't push
+// the visible card past the viewport edge. Values are in CSS pixels:
+//   - HOVER_SCALE already expands the card by up to 8% each side
+//   - the 3D rotateX/Y perspective shears corners by a few extra pixels
+//   - camera-rotation parallax (4% of the shorter viewport edge, see
+//     Experience.computePopupParallaxOffset) is added AFTER the anchor damp
+//     so we have to pre-reserve its full magnitude here or the popup would
+//     occasionally leak off screen at extreme camera angles.
+const POPUP_TILT_SAFETY_PX = 10;
+const POPUP_PARALLAX_BUDGET_FRACTION = 0.04;
 
 // Anchor deadzone: kept intentionally tiny. A larger threshold creates
 // "stop motion" -- slow drift below the threshold is swallowed until it
@@ -402,34 +413,139 @@ export class SpatialFocusUI {
   }
 
   /**
-   * Given the focused object's bbox center (in screen pixels) + size, picks
-   * a popup anchor point near the object but pushed away from viewport edges.
+   * Safe inset that the popup center must stay within so that the fully-
+   * rendered card (at max hover scale, including CSS tilt shear and the
+   * world-anchor parallax offset applied post-damp in update()) is
+   * guaranteed to lie inside the viewport with POPUP_MARGIN breathing room.
+   *
+   * Using the live measured offsetHeight instead of POPUP_HEIGHT_ESTIMATE
+   * keeps this correct when the label wraps, fonts change metrics on load,
+   * or future localisation changes the row count.
    */
-  computePopupPosition(objectCenter, bboxSize) {
+  getPopupSafeBounds() {
     const W = this.viewport.width;
     const H = this.viewport.height;
 
-    // Prefer right side of the object; if that would clip, flip to left.
-    const preferRight =
-      objectCenter.x + bboxSize.halfW + POPUP_OFFSET + POPUP_WIDTH + POPUP_MARGIN < W;
+    // Reserve the maximum possible scale (HOVER_SCALE) even when the card
+    // is at rest, so that a hover-in doesn't pop the card out of the safe
+    // zone and momentarily clip.
+    const maxScale = HOVER_SCALE;
+    const halfW = POPUP_WIDTH * maxScale * 0.5;
+    const baseHeight = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
+    const halfH = baseHeight * maxScale * 0.5;
 
-    const sideDx = preferRight
-      ? bboxSize.halfW + POPUP_OFFSET + POPUP_WIDTH * 0.5
-      : -(bboxSize.halfW + POPUP_OFFSET + POPUP_WIDTH * 0.5);
+    const parallaxPad = Math.min(W, H) * POPUP_PARALLAX_BUDGET_FRACTION;
+    const pad = POPUP_MARGIN + POPUP_TILT_SAFETY_PX + parallaxPad;
 
-    let popupX = objectCenter.x + sideDx;
-    let popupY = objectCenter.y;
+    return {
+      minX: halfW + pad,
+      maxX: W - halfW - pad,
+      minY: halfH + pad,
+      maxY: H - halfH - pad
+    };
+  }
 
-    // Clamp inside viewport with margin.
-    const minX = POPUP_WIDTH * 0.5 + POPUP_MARGIN;
-    const maxX = W - POPUP_WIDTH * 0.5 - POPUP_MARGIN;
-    const minY = POPUP_HEIGHT_ESTIMATE * 0.5 + POPUP_MARGIN;
-    const maxY = H - POPUP_HEIGHT_ESTIMATE * 0.5 - POPUP_MARGIN;
+  /**
+   * Bounds used by the final render-time clamp. Unlike getPopupSafeBounds
+   * this one reserves only the CURRENT scale plus the tilt perspective
+   * budget -- no parallax budget, because parallax is already baked into
+   * the position before clamping. Acts as a hard guarantee that the card
+   * is inside the viewport (with margin) regardless of any upstream drift.
+   */
+  getPopupRenderBounds() {
+    const W = this.viewport.width;
+    const H = this.viewport.height;
 
-    popupX = Math.min(Math.max(popupX, minX), maxX);
-    popupY = Math.min(Math.max(popupY, minY), maxY);
+    // Use live scale but never shrink the safe zone below a floor -- during
+    // fade-out the card's scale falls to 0.92 and we still want the clamp
+    // to assume something close to full size so a retargetting jump doesn't
+    // briefly ride the edge before the opacity reaches the hide threshold.
+    const activeScale = Math.max(this.current.scale, 1);
+    const halfW = POPUP_WIDTH * activeScale * 0.5;
+    const baseHeight = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
+    const halfH = baseHeight * activeScale * 0.5;
 
-    return { x: popupX, y: popupY, side: preferRight ? 'right' : 'left' };
+    const pad = POPUP_MARGIN + POPUP_TILT_SAFETY_PX;
+    return {
+      minX: halfW + pad,
+      maxX: W - halfW - pad,
+      minY: halfH + pad,
+      maxY: H - halfH - pad
+    };
+  }
+
+  /**
+   * Given the focused object's bbox center (in screen pixels) + size, picks
+   * a popup anchor point near the object but pushed away from viewport edges.
+   *
+   * Placement priority: TOP → RIGHT → BOTTOM → LEFT. We pick the first side
+   * where the popup center lands fully inside the safe zone. If none fits
+   * (tiny viewport, huge object), we fall back to the side that overflows
+   * by the smallest margin so the clamp pushes the popup back in with the
+   * least visual disruption.
+   */
+  computePopupPosition(objectCenter, bboxSize) {
+    const bounds = this.getPopupSafeBounds();
+    const popupH = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
+    const popupHalfW = POPUP_WIDTH * 0.5;
+    const popupHalfH = popupH * 0.5;
+
+    // Four candidate anchor centers, in priority order.
+    const candidates = [
+      {
+        side: 'top',
+        x: objectCenter.x,
+        y: objectCenter.y - bboxSize.halfH - POPUP_OFFSET - popupHalfH
+      },
+      {
+        side: 'right',
+        x: objectCenter.x + bboxSize.halfW + POPUP_OFFSET + popupHalfW,
+        y: objectCenter.y
+      },
+      {
+        side: 'bottom',
+        x: objectCenter.x,
+        y: objectCenter.y + bboxSize.halfH + POPUP_OFFSET + popupHalfH
+      },
+      {
+        side: 'left',
+        x: objectCenter.x - bboxSize.halfW - POPUP_OFFSET - popupHalfW,
+        y: objectCenter.y
+      }
+    ];
+
+    const fits = (c) =>
+      c.x >= bounds.minX
+      && c.x <= bounds.maxX
+      && c.y >= bounds.minY
+      && c.y <= bounds.maxY;
+
+    let chosen = candidates.find(fits);
+
+    if (!chosen) {
+      // Nothing fits: pick the candidate with the smallest combined axis
+      // overflow, so the final clamp only has to shove it a tiny bit.
+      let bestOverflow = Infinity;
+      for (const c of candidates) {
+        const ox = Math.max(0, bounds.minX - c.x, c.x - bounds.maxX);
+        const oy = Math.max(0, bounds.minY - c.y, c.y - bounds.maxY);
+        const overflow = ox + oy;
+        if (overflow < bestOverflow) {
+          bestOverflow = overflow;
+          chosen = c;
+        }
+      }
+    }
+
+    let popupX = Math.min(Math.max(chosen.x, bounds.minX), bounds.maxX);
+    let popupY = Math.min(Math.max(chosen.y, bounds.minY), bounds.maxY);
+
+    // Degenerate case: viewport smaller than the popup + padding. Fall back
+    // to dead-center so we never pass NaN / inverted bounds downstream.
+    if (bounds.maxX < bounds.minX) popupX = this.viewport.width * 0.5;
+    if (bounds.maxY < bounds.minY) popupY = this.viewport.height * 0.5;
+
+    return { x: popupX, y: popupY, side: chosen.side };
   }
 
   renderPingAndConnector(objectCenter, popupCenter, popupSide) {
@@ -440,10 +556,21 @@ export class SpatialFocusUI {
 
     const NS = 'http://www.w3.org/2000/svg';
 
+    // Attach the connector to whichever popup edge faces the object. The
+    // half-sizes use current.scale so the line lands on the *rendered*
+    // card edge during hover-scale changes instead of a static size.
+    const popupHalfW = POPUP_WIDTH * this.current.scale * 0.5;
+    const baseHeight = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
+    const popupHalfH = baseHeight * this.current.scale * 0.5;
+
+    let popupAnchorX = popupCenter.x;
+    let popupAnchorY = popupCenter.y;
+    if (popupSide === 'top') popupAnchorY = popupCenter.y + popupHalfH;
+    else if (popupSide === 'bottom') popupAnchorY = popupCenter.y - popupHalfH;
+    else if (popupSide === 'left') popupAnchorX = popupCenter.x + popupHalfW;
+    else popupAnchorX = popupCenter.x - popupHalfW; // 'right'
+
     const connector = document.createElementNS(NS, 'path');
-    const popupAnchorX =
-      popupCenter.x + (popupSide === 'right' ? -POPUP_WIDTH * 0.5 : POPUP_WIDTH * 0.5);
-    const popupAnchorY = popupCenter.y;
     const midX = (objectCenter.x + popupAnchorX) * 0.5;
     const midY = (objectCenter.y + popupAnchorY) * 0.5;
     connector.setAttribute(
@@ -573,8 +700,12 @@ export class SpatialFocusUI {
       const hoverHalfW = hoverWidth * 0.5;
       const baseHoverHeight = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
       const hoverHalfH = baseHoverHeight * this.current.scale * 0.5;
-      const renderCenterX = this.current.popupX + this.currentParallax.x;
-      const renderCenterY = this.current.popupY + this.currentParallax.y;
+      // Use the previous frame's clamped render center. First frame after
+      // becoming visible we don't have one yet, so fall back to raw anchor.
+      const renderCenterX =
+        this._renderX ?? this.current.popupX + this.currentParallax.x;
+      const renderCenterY =
+        this._renderY ?? this.current.popupY + this.currentParallax.y;
       const hoverDx = this.pointerClient.x - renderCenterX;
       const hoverDy = this.pointerClient.y - renderCenterY;
       const hoverInside =
@@ -629,8 +760,28 @@ export class SpatialFocusUI {
     // here ONLY: the target / damp chain stays on the pure anchor so the
     // popup is still rock-steady at rest, but head motion gives it that
     // subtle "it's anchored in world space, not glued to your eye" drift.
-    const renderX = this.current.popupX + this.currentParallax.x;
-    const renderY = this.current.popupY + this.currentParallax.y;
+    //
+    // Final safety-clamp: guarantee the visible card (at whatever scale the
+    // entrance / hover spring is currently at) stays fully inside the
+    // viewport even if the anchor + parallax sum would push it out. The
+    // upstream anchor is already clamped with a parallax budget, so in
+    // practice this only kicks in when the viewport is very small or the
+    // popup is scaled above the max reserve -- a free belt on top of
+    // getPopupSafeBounds's suspenders.
+    const safeRender = this.getPopupRenderBounds();
+    const renderX = Math.min(
+      Math.max(this.current.popupX + this.currentParallax.x, safeRender.minX),
+      safeRender.maxX
+    );
+    const renderY = Math.min(
+      Math.max(this.current.popupY + this.currentParallax.y, safeRender.minY),
+      safeRender.maxY
+    );
+
+    // Cache for getPopupScreenRect / isPointInPopup so the 3D glass and
+    // hit-testing line up with the clamped on-screen position.
+    this._renderX = renderX;
+    this._renderY = renderY;
 
     this.popup.style.opacity = `${this.current.opacity}`;
     this.popup.style.transform =
@@ -669,11 +820,11 @@ export class SpatialFocusUI {
     const baseHeight = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
     const height = baseHeight * this.current.scale;
 
-    // Include parallax so the 3D glass panel tracks the visually rendered
-    // popup rect, not the pre-parallax anchor. Keeps refraction glued to
-    // the text above.
-    const cx = this.current.popupX + this.currentParallax.x;
-    const cy = this.current.popupY + this.currentParallax.y;
+    // Use the clamped rendered center so the 3D glass panel sits exactly
+    // behind the visible DOM card -- not behind an unclamped "logical"
+    // position that may have been shoved off-screen.
+    const cx = this._renderX ?? this.current.popupX + this.currentParallax.x;
+    const cy = this._renderY ?? this.current.popupY + this.currentParallax.y;
 
     return {
       x: cx - width / 2,
@@ -702,8 +853,11 @@ export class SpatialFocusUI {
     const width = POPUP_WIDTH * this.current.scale;
     const baseHeight = this.popup.offsetHeight || POPUP_HEIGHT_ESTIMATE;
     const height = baseHeight * this.current.scale;
-    const left = this.current.popupX + this.currentParallax.x - width / 2;
-    const top = this.current.popupY + this.currentParallax.y - height / 2;
+    // Hit-test against the clamped rendered position, same as the 3D glass.
+    const cx = this._renderX ?? this.current.popupX + this.currentParallax.x;
+    const cy = this._renderY ?? this.current.popupY + this.currentParallax.y;
+    const left = cx - width / 2;
+    const top = cy - height / 2;
     return (
       clientX >= left
       && clientX <= left + width
