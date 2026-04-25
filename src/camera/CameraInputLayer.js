@@ -74,6 +74,46 @@ export class CameraInputLayer {
     }
   }
 
+  /**
+   * Hot-swap the backing video source (same contract as initialize()).
+   *
+   * @param {*} newSource
+   * @param {{ mirror?: boolean }} [options]
+   */
+  async replaceVideoSource(newSource, { mirror } = {}) {
+    if (mirror != null) {
+      this.setMirror(mirror);
+    }
+
+    try {
+      await newSource.initialize();
+    } catch (error) {
+      console.error('replaceVideoSource: new source failed', error);
+      newSource.dispose();
+      throw error;
+    }
+
+    if (this.videoTexture) {
+      this.videoTexture.dispose();
+      this.videoTexture = null;
+    }
+    this.videoSource?.dispose();
+    this.videoSource = newSource;
+
+    this.videoTexture = new VideoTexture(this.videoSource.getVideoElement());
+    this.videoTexture.colorSpace = SRGBColorSpace;
+    this.videoTexture.minFilter = LinearFilter;
+    this.videoTexture.magFilter = LinearFilter;
+    this.videoTexture.generateMipmaps = false;
+
+    this.surface.material.map = this.videoTexture;
+    this.surface.material.color.set('#ffffff');
+    this.surface.material.needsUpdate = true;
+
+    this.isReady = true;
+    return true;
+  }
+
   setMirror(value) {
     this.mirror = Boolean(value);
     this.frameGroup.scale.x = this.mirror ? -1 : 1;

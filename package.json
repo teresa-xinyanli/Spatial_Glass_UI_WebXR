@@ -12,6 +12,8 @@
     "@mediapipe/tasks-vision": "^0.10.34",
     "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow/tfjs": "^4.22.0",
+    "hls.js": "^1.6.16",
+    "mpegts.js": "^1.8.0",
     "three": "^0.178.0"
   },
   "devDependencies": {

@@ -15,7 +15,9 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 
 import { damp } from '../utils/damp.js';
 import { CameraVideoSource } from '../sources/CameraVideoSource.js';
+import { StreamUrlVideoSource } from '../sources/StreamUrlVideoSource.js';
 import { CameraInputLayer } from '../camera/CameraInputLayer.js';
+import { VideoSourcePanel } from '../ui/VideoSourcePanel.js';
 import { ObjectDetector } from '../detection/ObjectDetector.js';
 import { InteractiveSegmenter } from '../detection/InteractiveSegmenter.js';
 import { toChineseLabel } from '../detection/labels.zh.js';
@@ -162,9 +164,21 @@ export class Experience {
     this.setupLights();
     this.setupEvents();
     this.setupXR();
+    this.videoSourcePanel = null;
     this.initializeCameraAndDetection();
 
     this.renderer.setAnimationLoop(() => this.update());
+  }
+
+  ensureVideoSourcePanel() {
+    if (this.videoSourcePanel) {
+      return;
+    }
+    this.videoSourcePanel = new VideoSourcePanel({
+      onApply: (spec) => {
+        void this.applyVideoSourceSpec(spec);
+      }
+    });
   }
 
   setupLights() {
@@ -234,6 +248,7 @@ export class Experience {
     this.focusUI.dispose();
     this.detectionOverlay?.dispose();
     this.cameraInputLayer.dispose();
+    this.videoSourcePanel?.dispose();
     this.statusBadge?.dispose();
   };
 
@@ -566,6 +581,8 @@ export class Experience {
 
   async initializeCameraAndDetection() {
     const cameraReady = await this.cameraInputLayer.initialize();
+    this.ensureVideoSourcePanel();
+
     if (!cameraReady) {
       this.statusBadge.set('error', 'camera permission denied', 'CAMERA');
       return;
@@ -598,6 +615,45 @@ export class Experience {
       console.error('Segmenter initialization failed:', error);
       this.statusBadge.set('error', 'segmenter init failed', 'SEGMENTER');
       this.segmenter = null;
+    }
+  }
+
+  /**
+   * @param {{ type: 'camera', facingMode?: string } | { type: 'stream', url: string, mode?: string }} spec
+   */
+  async applyVideoSourceSpec(spec) {
+    if (!spec || !this.cameraInputLayer) {
+      return;
+    }
+
+    this.objectDetector?.stop();
+
+    const next =
+      spec.type === 'camera'
+        ? new CameraVideoSource({ facingMode: spec.facingMode || 'user' })
+        : new StreamUrlVideoSource({
+          url: spec.url,
+          mode: spec.mode === 'hls' || spec.mode === 'flv' || spec.mode === 'native' ? spec.mode : 'auto'
+        });
+
+    this.statusBadge.set('loading', 'loading video…', 'VIDEO');
+
+    try {
+      const mirror = Boolean(next.shouldMirrorByDefault);
+      await this.cameraInputLayer.replaceVideoSource(next, { mirror });
+      this.videoSource = next;
+      this.detectionOverlay.setMirror(this.cameraInputLayer.mirror);
+
+      if (this.objectDetector?.model) {
+        this.objectDetector.start(this.cameraInputLayer.getVideoElement());
+      }
+
+      const label = spec.type === 'camera' ? 'camera live' : 'stream live';
+      this.statusBadge.set('ready', label, 'VIDEO');
+    } catch (error) {
+      console.error('Video source switch failed:', error);
+      const msg = error?.message || String(error);
+      this.statusBadge.set('error', msg.slice(0, 96), 'VIDEO');
     }
   }
 
