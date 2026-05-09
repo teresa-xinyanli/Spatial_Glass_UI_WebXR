@@ -22,8 +22,3 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Ollama console (companion tool, not part of the Spatial Glass UI repo)
-console.html
-src/console-main.js
-src/styles.css
-release/
