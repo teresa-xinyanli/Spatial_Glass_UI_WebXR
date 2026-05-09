@@ -1,4 +1,4 @@
-# Spatial Glass UI (WebXR)
+# WebXR Object Detection
 
 A futuristic spatial UI inspired by Apple Vision Pro — floating glass panels
 in space, with subtle motion, depth, and real-world object interaction via
